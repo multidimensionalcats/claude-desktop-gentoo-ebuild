@@ -1,0 +1,233 @@
+# Copyright 1999-2025 Gentoo Authors
+# Distributed under the terms of the GNU General Public License v2
+
+EAPI=8
+
+inherit desktop unpacker xdg
+
+DESCRIPTION="Unofficial Linux build of Claude Desktop AI assistant"
+HOMEPAGE="https://claude.ai"
+
+# Based on the Windows installer URL pattern from the research
+SRC_URI="https://storage.googleapis.com/osprey-downloads-c02f6a0d-347c-492b-a752-3e0651722e97/nest-win-x64/Claude-Setup-x64.exe -> claude-setup-${PV}-x64.exe"
+
+LICENSE="Claude-ToS"  # Proprietary - covered by Anthropic's Terms of Service
+SLOT="0"
+KEYWORDS="~amd64"
+IUSE="wayland"
+
+# Dependencies based on what the Arch PKGBUILD requires
+DEPEND=""
+RDEPEND="
+	>=app-accessibility/at-spi2-core-2.46.0
+	dev-libs/expat
+	dev-libs/glib:2
+	dev-libs/nspr
+	dev-libs/nss
+	media-libs/alsa-lib
+	media-libs/mesa
+	net-print/cups
+	sys-apps/dbus
+	x11-libs/cairo
+	x11-libs/gdk-pixbuf:2
+	x11-libs/gtk+:3
+	x11-libs/libdrm
+	x11-libs/libX11
+	x11-libs/libxcb
+	x11-libs/libXcomposite
+	x11-libs/libXdamage
+	x11-libs/libXext
+	x11-libs/libXfixes
+	x11-libs/libXrandr
+	x11-libs/libxshmfence
+	x11-libs/libXScrnSaver
+	x11-libs/pango
+	wayland? (
+		dev-libs/wayland
+		x11-libs/libxkbcommon
+	)
+"
+BDEPEND="
+	app-arch/p7zip
+	media-gfx/imagemagick
+	media-gfx/icoutils
+	net-misc/wget
+	sys-apps/which
+"
+
+S="${WORKDIR}"
+
+# Restrict since we're downloading proprietary software
+RESTRICT="mirror strip"
+
+QA_PREBUILT="
+	opt/claude-desktop/claude-desktop
+	opt/claude-desktop/chrome-sandbox
+	opt/claude-desktop/libEGL.so
+	opt/claude-desktop/libGLESv2.so
+	opt/claude-desktop/libffmpeg.so
+	opt/claude-desktop/libvk_swiftshader.so
+	opt/claude-desktop/libvulkan.so.1
+"
+
+src_unpack() {
+	# Create working directory
+	mkdir -p "${S}/build" || die
+
+	# Extract the Windows installer
+	cd "${S}/build" || die
+	7z x "${DISTDIR}/claude-setup-${PV}-x64.exe" || die "Failed to extract installer"
+
+	# Find and extract the nupkg file dynamically (pattern from Arch PKGBUILD)
+	local nupkg_file=$(find . -name "AnthropicClaude*-full.nupkg" | head -1)
+	if [[ -z "${nupkg_file}" ]]; then
+		die "Could not find AnthropicClaude nupkg file"
+	fi
+	
+	einfo "Extracting ${nupkg_file}"
+	7z x "${nupkg_file}" || die "Failed to extract nupkg"
+
+	# Extract the app content
+	local app_dir=$(find . -name "lib" -type d | head -1)
+	if [[ -z "${app_dir}" ]]; then
+		die "Could not find app lib directory"
+	fi
+	
+	cd "${app_dir}/net45" || die "Could not find net45 directory"
+}
+
+src_prepare() {
+	default
+
+	cd "${S}/build" || die
+
+	# Find the app directory
+	local app_path=$(find . -name "app-*" -type d | head -1)
+	if [[ -z "${app_path}" ]]; then
+		die "Could not find app directory"
+	fi
+
+	cd "${app_path}" || die
+
+	# Extract app.asar for modification (based on Arch PKGBUILD approach)
+	if [[ -f "resources/app.asar" ]]; then
+		# We need to replace the native bindings
+		# For now, we'll use the app.asar as-is and handle native bindings separately
+		# This is a simplified approach - a full implementation would extract and modify app.asar
+		einfo "Found app.asar, proceeding with installation"
+	else
+		die "Could not find app.asar"
+	fi
+
+	# Extract icons
+	if command -v wrestool >/dev/null 2>&1 && command -v icotool >/dev/null 2>&1; then
+		wrestool -x -t 14 "${DISTDIR}/claude-setup-${PV}-x64.exe" > claude.ico 2>/dev/null || ewarn "Could not extract icon"
+		if [[ -f claude.ico ]]; then
+			icotool -x claude.ico || ewarn "Could not convert icon"
+		fi
+	fi
+}
+
+src_install() {
+	cd "${S}/build" || die
+
+	# Find the extracted app directory
+	local app_path=$(find . -name "app-*" -type d | head -1)
+	[[ -z "${app_path}" ]] && die "Could not find app directory"
+	
+	cd "${app_path}" || die
+
+	# Install to /opt/claude-desktop
+	local install_dir="/opt/claude-desktop"
+	insinto "${install_dir}"
+	
+	# Install the main application files
+	if [[ -d "resources" ]]; then
+		doins -r resources/
+	else
+		die "Could not find resources directory"
+	fi
+
+	# Create a wrapper script
+	cat > "${T}/claude-desktop" <<-EOF || die
+#!/bin/bash
+# Claude Desktop launcher script
+
+CLAUDE_DIR="${EROOT}${install_dir}"
+export ELECTRON_IS_DEV=0
+export ELECTRON_OVERRIDE_DIST_PATH="\${CLAUDE_DIR}"
+
+# Wayland support
+if [[ "\${XDG_SESSION_TYPE}" == "wayland" ]] && use wayland; then
+	ELECTRON_OZONE_PLATFORM_HINT=wayland
+	export ELECTRON_OZONE_PLATFORM_HINT
+	WAYLAND_FLAGS="--enable-features=UseOzonePlatform,WaylandWindowDecorations --ozone-platform=wayland"
+fi
+
+# Find system electron
+ELECTRON_BINARY="\$(which electron)"
+if [[ ! -x "\${ELECTRON_BINARY}" ]]; then
+	echo "Error: electron not found in PATH" >&2
+	exit 1
+fi
+
+cd "\${CLAUDE_DIR}" || exit 1
+exec "\${ELECTRON_BINARY}" \${WAYLAND_FLAGS} "\${CLAUDE_DIR}/resources/app.asar" "\$@"
+EOF
+
+	exeinto /usr/bin
+	doexe "${T}/claude-desktop"
+
+	# Install desktop entry
+	make_desktop_entry \
+		"claude-desktop" \
+		"Claude Desktop" \
+		"claude-desktop" \
+		"Development;Chat;" \
+		"MimeType=x-scheme-handler/claude;\nStartupWMClass=Claude"
+
+	# Install icon if we extracted one
+	local icon_size
+	for icon_file in claude_*_*.png; do
+		if [[ -f "${icon_file}" ]]; then
+			icon_size=$(echo "${icon_file}" | sed 's/.*_\([0-9]*\)_.*/\1/')
+			newicon -s "${icon_size}" "${icon_file}" claude-desktop.png
+		fi
+	done
+
+	# Fallback: create a simple icon if extraction failed
+	if ! ls "${ED}"/usr/share/icons/hicolor/*/apps/claude-desktop.png >/dev/null 2>&1; then
+		# Create a minimal SVG icon as fallback
+		cat > "${T}/claude-desktop.svg" <<-EOF || die
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="64" height="64" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+  <rect width="64" height="64" fill="#2563eb" rx="8"/>
+  <text x="32" y="40" font-family="Arial" font-size="24" fill="white" text-anchor="middle">C</text>
+</svg>
+EOF
+		doicon "${T}/claude-desktop.svg"
+	fi
+}
+
+pkg_postinst() {
+	xdg_pkg_postinst
+
+	elog ""
+	elog "Claude Desktop has been installed to ${EROOT}/opt/claude-desktop"
+	elog ""
+	elog "This is an unofficial build that extracts and adapts the Windows"
+	elog "version of Claude Desktop for Linux use."
+	elog ""
+	elog "MCP configuration can be placed at:"
+	elog "  ~/.config/Claude/claude_desktop_config.json"
+	elog ""
+	elog "If you experience issues:"
+	elog "  - Ensure you have a compatible electron installation"
+	elog "  - Try running 'claude-desktop' from a terminal for debug output"
+	elog "  - Check that all dependencies are installed"
+	elog ""
+	if use wayland; then
+		elog "Wayland support is enabled. If you experience issues, you can"
+		elog "disable the wayland USE flag and rebuild."
+	fi
+}

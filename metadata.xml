@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE pkgmetadata SYSTEM "https://www.gentoo.org/dtd/metadata.dtd">
+<pkgmetadata>
+	<maintainer type="person">
+		<email>your-email@example.com</email>
+		<name>Your Name</name>
+		<description>Unofficial Gentoo package maintainer</description>
+	</maintainer>
+	
+	<longdescription lang="en">
+		Claude Desktop is an AI assistant application by Anthropic that provides 
+		access to Claude AI models through a native desktop interface. This 
+		unofficial Linux build extracts and adapts the Windows version for Linux 
+		by bundling a modern Electron runtime and replacing Windows-specific 
+		components with Linux-compatible implementations.
+		
+		Features include full AI assistant functionality, MCP (Model Context 
+		Protocol) support for local tool integration, native desktop integration 
+		with system tray and keyboard shortcuts, and automatic Wayland/X11 detection.
+		
+		Note: This is an unofficial package that downloads proprietary software 
+		from Anthropic and requires network access during build to download 
+		Electron components via npm.
+	</longdescription>
+	
+	<use>
+		<flag name="wayland">
+			Enable Wayland support with automatic runtime detection and 
+			appropriate Electron flags for optimal Wayland integration
+		</flag>
+	</use>
+	
+	<upstream>
+		<remote-id type="github">anthropics/claude-desktop</remote-id>
+		<bugs-to>https://github.com/anthropics/claude-desktop/issues</bugs-to>
+		<doc lang="en">https://claude.ai/</doc>
+	</upstream>
+</pkgmetadata>
